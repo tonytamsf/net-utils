@@ -1,0 +1,19 @@
+#!/home/y/bin/perl -w
+
+use News::NNTPClient;
+$c = new News::NNTPClient("newsclip.ap.org");
+$c->authinfo('yahoo','inc');
+my $id= "<72c8a894-9f75-4901-a0f0-96295a33a944@news.ap.org>";
+eval
+{
+my $struct = $c->article($id);
+};
+if($@)
+{
+print $@;
+}
+if(!$struct)
+{
+  print "Article not available\n";
+  exit;
+}

@@ -1,0 +1,135 @@
+#!/home/y/bin/perl -w
+use strict;
+use Net::FTP;
+use Yahoo::DbDist;
+
+$| = 1;
+
+my $S_host  = 'electionsonline.ap.org';
+my @A_files = ('/Pres_Reports/xml/pres_summary.xml',
+	       '/Pres_Reports/xml/statebystate_pres.xml');
+my $S_user  = '!yahoo!';
+my $S_pass  = 'apelections';
+
+my $S_mirror = 'story.news.yahoo.com';
+
+# ----------------------------------------------------------------------
+my $S_local_dir = './';
+my $S_web_dir   = '/home/y/share/htdocs/private/us/news/elections/2004/xml/';
+use File::Basename;
+    
+sub report_error($)
+{
+    my ($msg) = @_;
+    print STDERR scalar(localtime()), " ERROR: ". $msg,"\n";
+}
+sub ftp_login()
+{
+    #
+    # TODO retry and alert
+    #
+    my $S_max_retry = 100;
+    my $ftp = undef;
+    while($S_max_retry-- > 0)
+    {
+	report_status("Trying connection to $S_host");
+	$ftp = Net::FTP->new($S_host,
+			     Debug => 0,
+			     Passive=>1,
+			     Timeout=>20,
+			     );
+	if (!$ftp)
+	{
+	    report_error("Cannot connect to $S_host: $@");
+	    next;
+	}
+	if (! $ftp->login($S_user, $S_pass))
+	{
+	    report_error("username and password not accepted");
+	    next;
+	}
+	last;
+    }
+    report_status("Got connection to $S_host");
+    return $ftp;
+}
+
+sub ftp_logout($)
+{
+    my ($ftp) = @_;
+    $ftp->quit();
+}
+
+sub report_status($)
+{
+    my ($msg) = @_;
+    print scalar(localtime()), " STATUS: ", $msg,"\n"; 
+}
+
+#
+# Connect
+# TODO timeouts?
+#
+my $ftp;
+$ftp = ftp_login();
+
+report_status("Connected");
+while (1)
+{
+    ##
+    ## Do a heartbeat and reconnect if we are no longer connected
+    ##
+    foreach my $S_file (@A_files)
+    {
+	my $S_dir = dirname($S_file);
+	my $S_file = basename($S_file);
+	if (! $ftp->cwd($S_dir))
+	{
+	    ftp_logout($ftp);
+	    $ftp = ftp_login();
+	    report_error("Cannot change working directory $S_dir ".$ftp->message);
+	    next;
+	}
+	
+	# get the modification time on the ftp servers
+	my $S_remote_mtime = $ftp->mdtm($S_file);
+	if (!$S_remote_mtime)
+	{
+	    ftp_logout($ftp);
+	    $ftp = ftp_login();
+	    report_error("Cannot get modification time $S_file  ".$ftp->message);
+	    next;
+	}
+	my $S_local_file   = $S_local_dir."/".$S_file;
+	my $S_web_file = $S_web_dir . "/". $S_file;
+	my $S_local_mtime  = 0;
+	if (-f $S_local_file)
+	{
+	    $S_local_mtime = (stat($S_local_file))[9];
+	}
+	if (!defined($S_local_mtime) || $S_remote_mtime > $S_local_mtime)
+	{
+	    report_status("remote time for $S_file is $S_remote_mtime and localtime for $S_local_file is $S_local_mtime");
+	    if (!$ftp->get($S_file, $S_local_file))
+	    {
+		ftp_logout($ftp);
+		$ftp = ftp_login();
+		report_error("get failed $S_file". $ftp->message);
+		next;
+	    }
+	    report_status("Got file $S_file sending to $S_web_file");
+	    Yahoo::DbDist::Send($S_mirror, File => $S_local_file, As => $S_web_file);
+	    $Yahoo::DbDist::Send::MIE_News = undef
+		if (defined($Yahoo::DbDist::Send::MIE_News));
+
+	} else {
+	    ## If the file has not changed in 7 minutes, report an error
+	    ## TODO
+	    report_status("file $S_file has not changed"); 
+		
+	}
+    }
+    report_status("slepping 5 secs");
+    sleep(5);
+}
+1;
